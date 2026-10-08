@@ -1,0 +1,41 @@
+@startuml to_be_container
+!include <C4/C4_Container>
+
+title Диаграмма контейнеров (To-Be): экосистема «Кинобездна»
+caption Переход по паттерну Strangler Fig: единая точка вызова (API Gateway/Proxy), выделенный сервис метаданных movies, событийная шина Kafka, платформа Kubernetes + Helm + Istio
+
+Person(user, "Зритель", "Пользователь кинотеатра-агрегатора:\nвеб, мобильное приложение, смарт-ТВ\n(разные интерфейсы и объём данных)")
+Person(partner, "Партнёры", "Платёжные системы, маркетплейсы,\nсервисы лояльности, источники контента")
+
+System_Boundary(cinemaabyss, "«Кинобездна» (кластер Kubernetes)") {
+  Container(proxy, "API Gateway (Proxy)", "Go", "Единая точка вызова сервисов.\nStrangler Fig: переключение трафика домена movies\nс монолита на микросервис по фича-флагу\nMOVIES_MIGRATION_PERCENT; маршрутизация, мониторинг")
+  Container(monolith, "Монолит (As-Is, сворачивается)", "Go + PostgreSQL", "Домены, ещё не выделенные:\nпользователи, платежи, подписки, скидки, избранное")
+  Container(movies, "Movies Service", "Go + PostgreSQL", "Выделенный сервис метаданных фильмов:\nфильмы, жанры, актёры, оценки")
+  Container(events, "Events Service", "Go", "Событийный MVP: публикация и потребление\nсобытий User/Payment/Movie в Kafka,\nобработка с записью в лог")
+  ContainerQueue(kafka, "Kafka", "Apache Kafka", "Событийная шина: топики movie-events,\nuser-events, payment-events")
+  ContainerDb(postgres, "PostgreSQL", "PostgreSQL 14", "Данные монолита и сервиса movies\n(на переходный период)")
+}
+
+System_Ext(recommend, "Рекомендательная система", "Сторонний сервис подборок контента")
+System_Ext(cicd, "CI/CD (GitHub Actions)", "Сборка, тесты, публикация образов в GHCR,\nдеплой через Helm")
+System_Ext(istio, "Istio (Service Mesh)", "Управление трафиком, mTLS,\nCircuit Breaker, канареечные релизы")
+
+Rel(user, proxy, "Смотрит контент, платит, оценивает", "HTTPS")
+Rel(partner, proxy, "Интеграции: платежи, лояльность, контент", "HTTPS")
+
+Rel(proxy, monolith, "Домены до выделения\n(100% − процент миграции)", "HTTP")
+Rel(proxy, movies, "Домен movies\n(MOVIES_MIGRATION_PERCENT)", "HTTP")
+Rel(proxy, events, "Публикация событий", "HTTP")
+
+Rel(events, kafka, "Producer: события User/Payment/Movie", "Kafka protocol")
+Rel(kafka, events, "Consumer: чтение и обработка событий", "Kafka protocol")
+
+Rel(monolith, postgres, "SQL")
+Rel(movies, postgres, "SQL")
+Rel(monolith, recommend, "Запрос рекомендаций (существующий вызов)", "API")
+
+Rel(cicd, cinemaabyss, "Сборка образов, Helm-деплой,\nпостепенное переключение трафика", "GHCR + Helm")
+Rel(istio, cinemaabyss, "Ingress-шлюз, маршрутизация,\nCircuit Breaker для monolith и movies", "sidecar-прокси")
+
+LAYOUT_WITH_LEGEND()
+@enduml
