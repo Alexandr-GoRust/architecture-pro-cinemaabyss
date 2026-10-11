@@ -63,6 +63,20 @@
 Необходимые тесты для проверки этого API вызываются при запуске npm run test:local из папки tests/postman 
 Приложите скриншот тестов и скриншот состояния топиков Kafka http://localhost:8090 
 
+### Решение
+
+**Proxy** (`src/microservices/proxy`, Go): обратный прокси на `httputil.ReverseProxy`. Запросы `/api/movies` маршрутизируются через фича-флаг: при `GRADUAL_MIGRATION=true` процент трафика из `MOVIES_MIGRATION_PERCENT` уходит в movies-service, остальное — в монолит; при `false` весь трафик домена идёт в микросервис. Прочие домены (`/api/users`, `/api/payments`, `/api/subscriptions`) и `/api/events` проксируются на монолит и events-service. Каждый movies-запрос логируется с указанием маршрута.
+
+**Events** (`src/microservices/events`, Go + segmentio/kafka-go): API `POST /api/events/{movie|user|payment}` валидирует обязательные поля домена, публикует событие в одноимённый топик Kafka и отвечает `{"status":"success","partition":..,"offset":..,"event":..}`. Консьюмеры (по группе на каждый топик) читают эти же топики и пишут обработку в лог. На каждый запрос создаётся одноразовый Writer — так соединение к брокеру не «виснет» после простоя.
+
+Результат прогона тестов (22 запроса, 42 assertions, 0 failed):
+
+![Postman/Newman тесты](docs/screenshots/newman.png)
+
+Топики Kafka (movie-events, payment-events, user-events) в Kafka UI:
+
+![Топики Kafka](docs/screenshots/kafka-ui-topics.png)
+
 
 ## Задание 3
 
@@ -276,7 +290,32 @@ cat .docker/config.json | base64
   Откройте логи event-service и сделайте скриншот обработки событий
 
 #### Шаг 3
-Добавьте сюда скриншота вывода при вызове https://cinemaabyss.example.com/api/movies и  скриншот вывода event-service после вызова тестов.
+
+### Результаты
+
+Зелёные сборки в GitHub Actions (ветка cinema; Docker Build and Push собирает и пушит все 4 образа в GHCR, включая proxy и events; API Tests прогоняют newman):
+
+![GitHub Actions — зелёные сборки](docs/screenshots/actions-list.png)
+
+![GitHub Actions — Docker Build and Push](docs/screenshots/actions-docker-build.png)
+
+Образы собираются мульти-платформенными (`linux/amd64,linux/arm64` через QEMU), поэтому кластер на Apple Silicon тянет их из GHCR без ошибок platform mismatch.
+
+Поды кластера после деплоя (у прикладных сервисов 2/2 контейнеров — после задания 5 это ещё и istio-сайдкар):
+
+![kubectl get pods](docs/screenshots/pods.png)
+
+Вывод `https://cinemaabyss.example.com/api/movies` через ingress (запрос уходит в movies-service через proxy):
+
+![curl /api/movies через ingress](docs/screenshots/api-movies.png)
+
+Логи events-service после тестов — события публикуются и потребляются:
+
+![Логи events-service](docs/screenshots/events-logs.png)
+
+Как выглядит кластер в дашборде minikube:
+
+![Minikube dashboard — поды](docs/screenshots/k8s-dashboard-pods.png)
 
 
 ## Задание 4
@@ -353,6 +392,16 @@ minikube tunnel
 https://cinemaabyss.example.com/api/movies
 и приложите скриншот развертывания helm и вывода https://cinemaabyss.example.com/api/movies
 
+### Результаты
+
+Чарт ставит всё приложение целиком (21 ресурс: секреты, configmap, postgres, kafka+zookeeper, 4 сервиса, ingress). Шаблоны proxy-service и events-service — в `src/kubernetes/helm/templates/services/`, пути образов и imagePullSecrets — в values.yaml:
+
+![helm list и helm status](docs/screenshots/helm.png)
+
+Вывод API после helm-деплоя (скриншот выше в задании 3): [docs/screenshots/api-movies.png](docs/screenshots/api-movies.png). Поды после helm install: [docs/screenshots/pods.png](docs/screenshots/pods.png), дашборд: [docs/screenshots/k8s-dashboard-pods.png](docs/screenshots/k8s-dashboard-pods.png).
+
+Примечание: если после переустановки кластер поймал `InconsistentClusterIdException` (Kafka не совпадает cluster id с новым Zookeeper) — лечится удалением `/kafka/kafka-logs/meta.properties` из PVC kafka-data и перезапуском пода.
+
 
 # Задание 5
 Компания планирует активно развиваться и для повышения надежности, безопасности, реализации сетевых паттернов типа Circuit Breaker и канареечного деплоя вам как архитектору необходимо развернуть istio и настроить circuit breaker для monolith и movies сервисов.
@@ -418,6 +467,22 @@ You can see 21 for the upstream_rq_pending_overflow value which means 21 calls s
 ```
 
 Приложите скриншот работы circuit breaker'а
+
+### Результаты
+
+Circuit Breaker настроен двумя DestinationRule (`src/kubernetes/circuit-breaker-config.yaml`) для monolith и movies-service: пул соединений (`maxConnections: 10`, `http1MaxPendingRequests: 1`, `maxRequestsPerConnection: 1`) + обнаружение выбросов (`consecutive5xxErrors: 5`, `baseEjectionTime: 30s`).
+
+Нагрузка fortio (50 соединений, 500 запросов) — предохранитель отработал, подавляющая часть запросов получила 503 от Envoy, не дойдя до сервиса:
+
+![Fortio — circuit breaker](docs/screenshots/fortio.png)
+
+Отчёт fortio UI (гистограмма латентности и коды ответов):
+
+![Fortio UI report](docs/screenshots/fortio-ui-report.png)
+
+Статистика сайдкара Envoy — `upstream_rq_pending_overflow: 908` (запросы, отклонённые из-за переполнения очереди):
+
+![pilot-agent stats](docs/screenshots/pilot-stats.png)
 
 Удаляем все
 ```bash
