@@ -11,8 +11,15 @@ spec:
     - host: cinemaabyss.example.com
       http:
         paths:
-          #дополните конфигурацию для /
-          ...
+          # Единая точка входа — прокси-сервис (API Gateway, Strangler Fig)
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: proxy-service
+                port:
+                  number: 8000
+          # События Kafka — напрямую в events-service (для проверки тестами)
           - path: /api/events
             pathType: Prefix
             backend:

@@ -1,0 +1,45 @@
+# Circuit Breaker для сервисов monolith и movies (Istio DestinationRule).
+#
+# connectionPool ограничивает одновременные соединения и запросы в очереди:
+# при превышении лимита Envoy сразу отвечает ошибкой 503 (upstream rq pending
+# overflow), не накапливая очередь и не заваливая сервис.
+# outlierDetection выводит ненадёжные экземпляры из балансировки.
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: monolith-circuit-breaker
+  namespace: cinemaabyss
+spec:
+  host: monolith
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 10
+      http:
+        http1MaxPendingRequests: 1
+        maxRequestsPerConnection: 1
+    outlierDetection:
+      consecutive5xxErrors: 5
+      interval: 10s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 100
+---
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: movies-circuit-breaker
+  namespace: cinemaabyss
+spec:
+  host: movies-service
+  trafficPolicy:
+    connectionPool:
+      tcp:
+        maxConnections: 10
+      http:
+        http1MaxPendingRequests: 1
+        maxRequestsPerConnection: 1
+    outlierDetection:
+      consecutive5xxErrors: 5
+      interval: 10s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 100

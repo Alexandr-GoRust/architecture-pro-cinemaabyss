@@ -154,3 +154,5 @@ go.work
 
 # Postman tests reports
 tests/postman/reports/
+# локальный override портов (не для PR)
+docker-compose.override.yml
